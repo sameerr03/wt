@@ -2,7 +2,30 @@
 
 Git worktree manager for Claude Code workflows. Create isolated worktrees per feature, work with Claude, merge PRs, and clean up — all in one tool.
 
-## Setup
+## Setup with Claude Code
+
+The easiest way to get started. This assumes you keep all your git repos in a single parent directory (e.g. `~/Code`, `~/Projects`, `~/dev`, etc.).
+
+1. Clone the repo and paste this prompt into Claude Code:
+
+   ```
+   I just cloned https://github.com/sameerr03/wt.git to ~/.wt. Set it up for me:
+   1. Add `source ~/.wt/wt.sh` to my shell rc file (.zshrc) if it's not already there
+   2. Copy ~/.wt/config.template.sh to ~/.wt/config.sh
+   3. Look at my git repos in ~/Code (replace with wherever I keep my projects).
+      For each repo found, add an entry to the WT_PROJECTS array in ~/.wt/config.sh
+      mapping the folder name to its absolute path
+   4. Set WORKTREE_BASE to a "worktrees" directory alongside my projects
+   5. Check each repo for bun.lockb or pnpm-lock.yaml — if found, add an override
+      to WT_PKG_MANAGER with "bun" or "pnpm" respectively
+   6. Tell me to run `source ~/.zshrc` when done
+   ```
+
+   > **Note:** Replace `~/Code` in the prompt with the actual path to the directory where you keep your projects.
+
+## Manual Setup
+
+If you prefer to set things up yourself:
 
 1. Clone the repo:
    ```bash
@@ -77,7 +100,7 @@ All config lives in `config.sh`:
 |----------|---------|---------|
 | `WT_PROJECTS` | Map of project name → repo path | — |
 | `WT_PKG_MANAGER` | Per-project package manager override | `npm` |
-| `WORKTREE_BASE` | Where worktrees are created | `/Users/sameer/Code/worktrees` |
+| `WORKTREE_BASE` | Where worktrees are created | `$HOME/Code/worktrees` |
 | `DEFAULT_BASE_BRANCH` | Branch to base new worktrees on | `main` |
 | `DEFAULT_INSTALL_CMD` | Default install command | `npm install` |
 
