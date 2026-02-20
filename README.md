@@ -60,6 +60,14 @@ wt new carousel fix-slider
 wt new carousel fix-slider --base dev
 ```
 
+### `wt cd <project> <feature>`
+
+Jumps into an existing worktree and continues the most recent Claude Code session.
+
+```bash
+wt cd carousel fix-slider
+```
+
 ### `wt merge <project> <feature> [--squash|--rebase]`
 
 Merges the PR, removes the worktree, deletes the branch (local + remote), and pulls main. Defaults to `--squash`.

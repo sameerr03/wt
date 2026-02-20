@@ -9,6 +9,7 @@ wt() {
 
   case "$cmd" in
     new)    _wt_new "$@" ;;
+    cd)     _wt_cd "$@" ;;
     rm)     _wt_rm "$@" ;;
     merge)  _wt_merge "$@" ;;
     ls)     _wt_ls "$@" ;;
@@ -24,6 +25,7 @@ _wt_help() {
   echo ""
   echo "Commands:"
   echo "  new   <project> <feature> [--base <branch>]   Create worktree, install deps, launch Claude"
+  echo "  cd    <project> <feature>                     Jump into worktree and continue Claude session"
   echo "  rm    <project> <feature> [--delete-branch]   Remove a worktree"
   echo "  merge <project> <feature> [--squash|--rebase] Merge PR, cleanup worktree & branch, pull main"
   echo "  ls    [project]                               List worktrees with PR status"
@@ -33,6 +35,7 @@ _wt_help() {
   echo "  Edit config.sh to add projects, set package managers, and change defaults."
   echo ""
   echo "Examples:"
+  echo "  wt cd carousel fix-slider               Jump into worktree and continue Claude session"
   echo "  wt new carousel fix-slider              Create worktree on new branch from main"
   echo "  wt new carousel fix-slider --base dev   Create worktree branching from dev"
   echo "  wt ls                                   List all worktrees with PR status"
@@ -49,6 +52,32 @@ _wt_get_install_cmd() {
   else
     echo "$DEFAULT_INSTALL_CMD"
   fi
+}
+
+_wt_cd() {
+  local project="$1" feature="$2"
+
+  if [[ -z "$project" || -z "$feature" ]]; then
+    echo "Usage: wt cd <project> <feature>"
+    return 1
+  fi
+
+  local repo_path="${WT_PROJECTS[$project]}"
+  if [[ -z "$repo_path" ]]; then
+    echo "Error: Unknown project '$project'"
+    echo "Available projects: ${(k)WT_PROJECTS}"
+    return 1
+  fi
+
+  local wt_path="$WORKTREE_BASE/$project/$feature"
+
+  if [[ ! -d "$wt_path" ]]; then
+    echo "Error: No worktree found at $wt_path"
+    return 1
+  fi
+
+  cd "$wt_path"
+  claude --continue
 }
 
 _wt_new() {
