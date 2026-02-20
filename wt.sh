@@ -8,19 +8,38 @@ wt() {
   shift
 
   case "$cmd" in
-    new)  _wt_new "$@" ;;
-    rm)   _wt_rm "$@" ;;
-    ls)   _wt_ls "$@" ;;
-    *)
-      echo "Usage: wt <command> [args]"
-      echo ""
-      echo "Commands:"
-      echo "  new <project> <feature> [--base <branch>]   Create a new worktree"
-      echo "  rm  <project> <feature> [--delete-branch]   Remove a worktree"
-      echo "  ls  [project]                               List active worktrees"
-      return 1
-      ;;
+    new)    _wt_new "$@" ;;
+    rm)     _wt_rm "$@" ;;
+    merge)  _wt_merge "$@" ;;
+    ls)     _wt_ls "$@" ;;
+    help)   _wt_help ;;
+    *)      _wt_help; return 1 ;;
   esac
+}
+
+_wt_help() {
+  echo "wt — Git worktree manager for Claude Code workflows"
+  echo ""
+  echo "Usage: wt <command> [args]"
+  echo ""
+  echo "Commands:"
+  echo "  new   <project> <feature> [--base <branch>]   Create worktree, install deps, launch Claude"
+  echo "  rm    <project> <feature> [--delete-branch]   Remove a worktree"
+  echo "  merge <project> <feature> [--squash|--rebase] Merge PR, cleanup worktree & branch, pull main"
+  echo "  ls    [project]                               List worktrees with PR status"
+  echo "  help                                          Show this help message"
+  echo ""
+  echo "Configuration:"
+  echo "  Edit config.sh to add projects, set package managers, and change defaults."
+  echo ""
+  echo "Examples:"
+  echo "  wt new carousel fix-slider              Create worktree on new branch from main"
+  echo "  wt new carousel fix-slider --base dev   Create worktree branching from dev"
+  echo "  wt ls                                   List all worktrees with PR status"
+  echo "  wt merge carousel fix-slider            Squash-merge PR, delete branch, remove worktree"
+  echo "  wt merge carousel fix-slider --rebase   Rebase-merge instead of squash"
+  echo "  wt rm carousel fix-slider               Remove worktree only"
+  echo "  wt rm carousel fix-slider --delete-branch  Remove worktree and delete branch"
 }
 
 _wt_get_install_cmd() {
@@ -176,33 +195,156 @@ _wt_rm() {
   echo "Done."
 }
 
+_wt_merge() {
+  local project="" feature="" merge_strategy="--squash"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --squash)
+        merge_strategy="--squash"
+        shift
+        ;;
+      --rebase)
+        merge_strategy="--rebase"
+        shift
+        ;;
+      *)
+        if [[ -z "$project" ]]; then
+          project="$1"
+        elif [[ -z "$feature" ]]; then
+          feature="$1"
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "$project" || -z "$feature" ]]; then
+    echo "Usage: wt merge <project> <feature> [--squash|--rebase]"
+    return 1
+  fi
+
+  local repo_path="${WT_PROJECTS[$project]}"
+  if [[ -z "$repo_path" ]]; then
+    echo "Error: Unknown project '$project'"
+    return 1
+  fi
+
+  local wt_path="$WORKTREE_BASE/$project/$feature"
+
+  # Check if there's a PR for this branch
+  local pr_number
+  pr_number=$(gh pr list --repo "$(git -C "$repo_path" remote get-url origin)" --head "$feature" --json number --jq '.[0].number' 2>/dev/null)
+
+  if [[ -z "$pr_number" ]]; then
+    echo "Error: No open PR found for branch '$feature'"
+    return 1
+  fi
+
+  echo "Merging PR #$pr_number for $project/$feature ($merge_strategy)..."
+
+  # Move out of worktree if we're in it
+  if [[ "$PWD" == "$wt_path"* ]]; then
+    cd "$repo_path"
+  fi
+
+  # Remove worktree first so the branch isn't checked out anywhere
+  if [[ -d "$wt_path" ]]; then
+    echo "Removing worktree..."
+    git -C "$repo_path" worktree remove "$wt_path" --force
+    if [[ -d "$wt_path" ]]; then
+      rm -rf "$wt_path"
+    fi
+  fi
+
+  # Delete local branch (now safe since worktree is gone)
+  git -C "$repo_path" branch -D "$feature" 2>/dev/null
+
+  # Merge the PR via gh CLI (deletes remote branch)
+  local remote_url
+  remote_url=$(git -C "$repo_path" remote get-url origin)
+  if ! gh pr merge "$pr_number" --repo "$remote_url" $merge_strategy --delete-branch; then
+    echo "Error: Failed to merge PR #$pr_number"
+    return 1
+  fi
+
+  # Switch to main and pull latest
+  echo "Updating local main branch..."
+  git -C "$repo_path" checkout "$DEFAULT_BASE_BRANCH" 2>/dev/null
+  git -C "$repo_path" pull origin "$DEFAULT_BASE_BRANCH"
+
+  cd "$repo_path"
+  echo "Done. PR #$pr_number merged, branch deleted, worktree cleaned up."
+}
+
 _wt_ls() {
   local project="$1"
 
   if [[ -n "$project" ]]; then
-    local repo_path="${WT_PROJECTS[$project]}"
-    if [[ -z "$repo_path" ]]; then
-      echo "Error: Unknown project '$project'"
-      return 1
-    fi
-    echo "Worktrees for $project:"
-    git -C "$repo_path" worktree list
+    _wt_ls_project "$project"
   else
+    local has_worktrees=false
     for p in "${(k)WT_PROJECTS[@]}"; do
-      local repo="${WT_PROJECTS[$p]}"
       local wt_dir="$WORKTREE_BASE/$p"
-      # Only show projects that have worktrees
       if [[ -d "$wt_dir" ]] && [[ -n "$(ls -A "$wt_dir" 2>/dev/null)" ]]; then
-        echo "$p:"
-        for d in "$wt_dir"/*(N/); do
-          local name="${d:t}"
-          echo "  $name  ($d)"
-        done
+        has_worktrees=true
+        _wt_ls_project "$p"
         echo ""
       fi
     done
-    if [[ -z "$(ls -A "$WORKTREE_BASE" 2>/dev/null)" ]]; then
+    if ! $has_worktrees; then
       echo "No active worktrees."
     fi
   fi
+}
+
+_wt_ls_project() {
+  local project="$1"
+  local repo_path="${WT_PROJECTS[$project]}"
+  if [[ -z "$repo_path" ]]; then
+    echo "Error: Unknown project '$project'"
+    return 1
+  fi
+
+  local remote_url
+  remote_url=$(git -C "$repo_path" remote get-url origin 2>/dev/null)
+  local wt_dir="$WORKTREE_BASE/$project"
+
+  echo "$project:"
+  for d in "$wt_dir"/*(N/); do
+    local name="${d:t}"
+    local pr_info=""
+
+    if [[ -n "$remote_url" ]]; then
+      local pr_json
+      pr_json=$(gh pr list --repo "$remote_url" --head "$name" --json number,state,reviewDecision,statusCheckRollup --jq '.[0]' 2>/dev/null)
+
+      if [[ -n "$pr_json" && "$pr_json" != "null" ]]; then
+        local pr_num=$(echo "$pr_json" | jq -r '.number')
+        local review=$(echo "$pr_json" | jq -r '.reviewDecision // "PENDING"')
+        local checks=$(echo "$pr_json" | jq -r '
+          if (.statusCheckRollup | length) == 0 then "NO CHECKS"
+          elif [.statusCheckRollup[] | select(.conclusion != "SUCCESS" and .conclusion != "")] | length == 0 then "✓ CHECKS PASS"
+          else "✗ CHECKS FAILING"
+          end
+        ')
+
+        case "$review" in
+          APPROVED)           review="✓ approved" ;;
+          CHANGES_REQUESTED)  review="✗ changes requested" ;;
+          REVIEW_REQUIRED)    review="⏳ review needed" ;;
+          *)                  review="⏳ no reviews" ;;
+        esac
+
+        pr_info="  PR #$pr_num — $review, $checks"
+      else
+        pr_info="  No PR"
+      fi
+    fi
+
+    echo "  $name  ($d)"
+    if [[ -n "$pr_info" ]]; then
+      echo "   $pr_info"
+    fi
+  done
 }
