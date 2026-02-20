@@ -14,7 +14,12 @@ Git worktree manager for Claude Code workflows. Create isolated worktrees per fe
    source ~/.wt/wt.sh
    ```
 
-3. Edit `config.sh` to register your projects:
+3. Copy the template and edit your config:
+   ```bash
+   cp ~/.wt/config.template.sh ~/.wt/config.sh
+   ```
+
+4. Edit `config.sh` to register your projects:
    ```bash
    declare -A WT_PROJECTS=(
      [myapp]="/path/to/myapp"
