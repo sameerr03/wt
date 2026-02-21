@@ -25,7 +25,7 @@ _wt_help() {
   echo ""
   echo "Commands:"
   echo "  new   <project> <feature> [--base <branch>]   Create worktree, install deps, launch Claude"
-  echo "  cd    <project> <feature>                     Jump into worktree and continue Claude session"
+  echo "  cd    <project> <feature>                     Jump into worktree (creates from existing branch if needed)"
   echo "  rm    <project> <feature> [--delete-branch]   Remove a worktree"
   echo "  merge <project> <feature> [--squash|--rebase] Merge PR, cleanup worktree & branch, pull main"
   echo "  ls    [project]                               List worktrees with PR status"
@@ -35,7 +35,7 @@ _wt_help() {
   echo "  Edit config.sh to add projects, set package managers, and change defaults."
   echo ""
   echo "Examples:"
-  echo "  wt cd carousel fix-slider               Jump into worktree and continue Claude session"
+  echo "  wt cd carousel fix-slider               Jump into worktree (or create from existing branch)"
   echo "  wt new carousel fix-slider              Create worktree on new branch from main"
   echo "  wt new carousel fix-slider --base dev   Create worktree branching from dev"
   echo "  wt ls                                   List all worktrees with PR status"
@@ -72,8 +72,50 @@ _wt_cd() {
   local wt_path="$WORKTREE_BASE/$project/$feature"
 
   if [[ ! -d "$wt_path" ]]; then
-    echo "Error: No worktree found at $wt_path"
-    return 1
+    # No worktree yet — check if branch exists and create worktree from it
+    echo "No worktree found. Looking for existing branch '$feature'..."
+
+    git -C "$repo_path" fetch origin 2>/dev/null
+
+    # Check if branch exists locally or on remote
+    if ! git -C "$repo_path" show-ref --verify --quiet "refs/heads/$feature" && \
+       ! git -C "$repo_path" show-ref --verify --quiet "refs/remotes/origin/$feature"; then
+      echo "Error: Branch '$feature' not found locally or on remote"
+      return 1
+    fi
+
+    mkdir -p "$WORKTREE_BASE/$project"
+
+    echo "Creating worktree for $project/$feature from existing branch..."
+    if ! git -C "$repo_path" worktree add "$wt_path" "$feature" 2>/dev/null; then
+      echo "Error: Failed to create worktree for branch '$feature'"
+      return 1
+    fi
+
+    echo "Worktree created at $wt_path"
+
+    # Copy env files
+    local env_count=0
+    for env_file in "$repo_path"/.env*; do
+      if [[ -f "$env_file" ]]; then
+        cp "$env_file" "$wt_path/"
+        env_count=$((env_count + 1))
+      fi
+    done
+    echo "Copied $env_count env file(s)"
+
+    # Install dependencies
+    local install_cmd="$(_wt_get_install_cmd "$project")"
+    echo "Running $install_cmd..."
+    (cd "$wt_path" && eval "$install_cmd")
+
+    if [[ $? -ne 0 ]]; then
+      echo "Warning: $install_cmd failed. You may need to run it manually."
+    fi
+
+    echo ""
+    echo "Ready! Entering worktree and resuming Claude Code..."
+    echo "---"
   fi
 
   cd "$wt_path"
