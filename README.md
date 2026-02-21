@@ -62,7 +62,7 @@ wt new carousel fix-slider --base dev
 
 ### `wt cd <project> <feature>`
 
-Jumps into an existing worktree and continues the most recent Claude Code session.
+Jumps into a worktree and continues the most recent Claude Code session. If no worktree exists but the branch does (locally or on the remote), it automatically creates the worktree, copies `.env` files, installs dependencies, and resumes the session.
 
 ```bash
 wt cd carousel fix-slider
