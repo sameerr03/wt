@@ -25,7 +25,7 @@ _wt_help() {
   echo ""
   echo "Commands:"
   echo "  new   <project> <feature> [--base <branch>]   Create worktree, install deps, launch Claude"
-  echo "  cd    <project> <feature>                     Jump into worktree (creates from existing branch if needed)"
+  echo "  cd    <project> <feature> [--no-claude]        Jump into worktree (creates from existing branch if needed)"
   echo "  rm    <project> <feature> [--delete-branch]   Remove a worktree"
   echo "  merge <project> <feature> [--squash|--rebase] Merge PR, cleanup worktree & branch, pull main"
   echo "  ls    [project]                               List worktrees with PR status"
@@ -36,6 +36,7 @@ _wt_help() {
   echo ""
   echo "Examples:"
   echo "  wt cd carousel fix-slider               Jump into worktree (or create from existing branch)"
+  echo "  wt cd carousel fix-slider --no-claude   Jump into worktree without starting Claude"
   echo "  wt new carousel fix-slider              Create worktree on new branch from main"
   echo "  wt new carousel fix-slider --base dev   Create worktree branching from dev"
   echo "  wt ls                                   List all worktrees with PR status"
@@ -55,10 +56,28 @@ _wt_get_install_cmd() {
 }
 
 _wt_cd() {
-  local project="$1" feature="$2"
+  local project="" feature="" launch_claude=true
+
+  # Parse args
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --no-claude)
+        launch_claude=false
+        shift
+        ;;
+      *)
+        if [[ -z "$project" ]]; then
+          project="$1"
+        elif [[ -z "$feature" ]]; then
+          feature="$1"
+        fi
+        shift
+        ;;
+    esac
+  done
 
   if [[ -z "$project" || -z "$feature" ]]; then
-    echo "Usage: wt cd <project> <feature>"
+    echo "Usage: wt cd <project> <feature> [--no-claude]"
     return 1
   fi
 
@@ -119,7 +138,9 @@ _wt_cd() {
   fi
 
   cd "$wt_path"
-  claude --continue
+  if $launch_claude; then
+    claude --continue
+  fi
 }
 
 _wt_new() {
