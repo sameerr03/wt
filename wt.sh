@@ -413,26 +413,11 @@ _wt_ls_project() {
 
     if [[ -n "$remote_url" ]]; then
       local pr_json
-      pr_json=$(gh pr list --repo "$remote_url" --head "$name" --json number,state,reviewDecision,statusCheckRollup --jq '.[0]' 2>/dev/null)
+      pr_json=$(gh pr list --repo "$remote_url" --head "$name" --json number --jq '.[0]' 2>/dev/null)
 
       if [[ -n "$pr_json" && "$pr_json" != "null" ]]; then
         local pr_num=$(echo "$pr_json" | jq -r '.number')
-        local review=$(echo "$pr_json" | jq -r '.reviewDecision // "PENDING"')
-        local checks=$(echo "$pr_json" | jq -r '
-          if (.statusCheckRollup | length) == 0 then "NO CHECKS"
-          elif [.statusCheckRollup[] | select(.conclusion != "SUCCESS" and .conclusion != "")] | length == 0 then "✓ CHECKS PASS"
-          else "✗ CHECKS FAILING"
-          end
-        ')
-
-        case "$review" in
-          APPROVED)           review="✓ approved" ;;
-          CHANGES_REQUESTED)  review="✗ changes requested" ;;
-          REVIEW_REQUIRED)    review="⏳ review needed" ;;
-          *)                  review="⏳ no reviews" ;;
-        esac
-
-        pr_info="  PR #$pr_num — $review, $checks"
+        pr_info="  PR #$pr_num"
       else
         pr_info="  No PR"
       fi
