@@ -27,7 +27,7 @@ _wt_help() {
   echo "  new   <project> <feature> [--base <branch>]   Create worktree, install deps, launch Claude"
   echo "  cd    <project> <feature> [--nc]               Jump into worktree (creates from existing branch if needed)"
   echo "  rm    <project> <feature> [--delete-branch]   Remove a worktree"
-  echo "  merge <project> <feature> [--squash|--rebase] Merge PR, cleanup worktree & branch, pull main"
+  echo "  merge <project> <feature> [--squash|--rebase] Merge PR, cleanup worktree & branch, pull main (default: merge commit)"
   echo "  ls    [project]                               List worktrees with PR status"
   echo "  help                                          Show this help message"
   echo ""
@@ -40,8 +40,8 @@ _wt_help() {
   echo "  wt new carousel fix-slider              Create worktree on new branch from main"
   echo "  wt new carousel fix-slider --base dev   Create worktree branching from dev"
   echo "  wt ls                                   List all worktrees with PR status"
-  echo "  wt merge carousel fix-slider            Squash-merge PR, delete branch, remove worktree"
-  echo "  wt merge carousel fix-slider --rebase   Rebase-merge instead of squash"
+  echo "  wt merge carousel fix-slider            Merge PR, delete branch, remove worktree"
+  echo "  wt merge carousel fix-slider --squash   Squash-merge instead of merge commit"
   echo "  wt rm carousel fix-slider               Remove worktree only"
   echo "  wt rm carousel fix-slider --delete-branch  Remove worktree and delete branch"
 }
@@ -288,7 +288,7 @@ _wt_rm() {
 }
 
 _wt_merge() {
-  local project="" feature="" merge_strategy="--squash"
+  local project="" feature="" merge_strategy="--merge"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -298,6 +298,10 @@ _wt_merge() {
         ;;
       --rebase)
         merge_strategy="--rebase"
+        shift
+        ;;
+      --merge)
+        merge_strategy="--merge"
         shift
         ;;
       *)
@@ -312,7 +316,7 @@ _wt_merge() {
   done
 
   if [[ -z "$project" || -z "$feature" ]]; then
-    echo "Usage: wt merge <project> <feature> [--squash|--rebase]"
+    echo "Usage: wt merge <project> <feature> [--squash|--rebase|--merge]"
     return 1
   fi
 

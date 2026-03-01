@@ -71,12 +71,13 @@ wt cd carousel fix-slider
 wt cd carousel fix-slider --nc
 ```
 
-### `wt merge <project> <feature> [--squash|--rebase]`
+### `wt merge <project> <feature> [--squash|--rebase|--merge]`
 
-Merges the PR, removes the worktree, deletes the branch (local + remote), and pulls main. Defaults to `--squash`.
+Merges the PR, removes the worktree, deletes the branch (local + remote), and pulls main. Defaults to `--merge` (merge commit).
 
 ```bash
 wt merge carousel fix-slider
+wt merge carousel fix-slider --squash
 wt merge carousel fix-slider --rebase
 ```
 
