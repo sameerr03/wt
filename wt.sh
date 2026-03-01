@@ -405,18 +405,17 @@ _wt_ls_project() {
   local remote_url
   remote_url=$(git -C "$repo_path" remote get-url origin 2>/dev/null)
   local wt_dir="$WORKTREE_BASE/$project"
+  local name pr_info pr_num
 
   echo "$project:"
   for d in "$wt_dir"/*(N/); do
-    local name="${d:t}"
-    local pr_info=""
+    name="${d:t}"
+    pr_info=""
 
     if [[ -n "$remote_url" ]]; then
-      local pr_json
-      pr_json=$(gh pr list --repo "$remote_url" --head "$name" --json number --jq '.[0]' 2>/dev/null)
+      pr_num=$(gh pr list --repo "$remote_url" --head "$name" --json number --jq '.[0].number' 2>/dev/null)
 
-      if [[ -n "$pr_json" && "$pr_json" != "null" ]]; then
-        local pr_num=$(echo "$pr_json" | jq -r '.number')
+      if [[ -n "$pr_num" && "$pr_num" != "null" ]]; then
         pr_info="  PR #$pr_num"
       else
         pr_info="  No PR"
