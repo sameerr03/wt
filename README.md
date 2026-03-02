@@ -49,18 +49,37 @@ If you prefer to set things up yourself:
    )
    ```
 
+## Auto-detection
+
+When you're inside a worktree or main repo directory, `wt` automatically detects the project and feature from your current path. This means you can skip typing them:
+
+```bash
+# Inside ~/Code/worktrees/carousel/fix-slider/
+wt merge                    # auto-detects carousel + fix-slider
+wt rm                       # auto-detects carousel + fix-slider
+wt cd other-feature         # auto-detects carousel, switches to other-feature
+wt new other-feature        # auto-detects carousel, creates new feature
+
+# Inside ~/Code/carousel/ (main repo)
+wt new fix-slider           # auto-detects carousel
+wt ls                       # shows only carousel worktrees
+```
+
+Explicit arguments always override auto-detected values — the old `wt merge carousel fix-slider` syntax still works everywhere.
+
 ## Commands
 
-### `wt new <project> <feature> [--base <branch>]`
+### `wt new [project] <feature> [--base <branch>]`
 
 Creates a worktree, copies `.env` files, installs dependencies, and launches Claude Code.
 
 ```bash
 wt new carousel fix-slider
+wt new fix-slider              # project auto-detected from current directory
 wt new carousel fix-slider --base dev
 ```
 
-### `wt cd <project> <feature> [--nc]`
+### `wt cd [project] [feature] [--nc]`
 
 Jumps into a worktree and continues the most recent Claude Code session. If no worktree exists but the branch does (locally or on the remote), it automatically creates the worktree, copies `.env` files, installs dependencies, and resumes the session.
 
@@ -68,31 +87,34 @@ Use `--nc` to jump into the worktree without starting Claude.
 
 ```bash
 wt cd carousel fix-slider
+wt cd fix-slider               # project auto-detected
 wt cd carousel fix-slider --nc
 ```
 
-### `wt merge <project> <feature> [--squash|--rebase|--merge]`
+### `wt merge [project] [feature] [--squash|--rebase|--merge]`
 
 Merges the PR, removes the worktree, deletes the branch (local + remote), and pulls main. Defaults to `--merge` (merge commit).
 
 ```bash
+wt merge                       # both auto-detected from current worktree
 wt merge carousel fix-slider
 wt merge carousel fix-slider --squash
 wt merge carousel fix-slider --rebase
 ```
 
-### `wt rm <project> <feature> [--delete-branch]`
+### `wt rm [project] [feature] [--delete-branch]`
 
 Removes a worktree without merging. Optionally deletes the branch.
 
 ```bash
+wt rm                          # both auto-detected from current worktree
 wt rm carousel fix-slider
 wt rm carousel fix-slider --delete-branch
 ```
 
 ### `wt ls [project]`
 
-Lists active worktrees with PR status (PR number, review state, checks).
+Lists active worktrees with PR status. Auto-filters to the current project when inside a worktree or repo.
 
 ```
 carousel:

@@ -24,26 +24,58 @@ _wt_help() {
   echo "Usage: wt <command> [args]"
   echo ""
   echo "Commands:"
-  echo "  new   <project> <feature> [--base <branch>]   Create worktree, install deps, launch Claude"
-  echo "  cd    <project> <feature> [--nc]               Jump into worktree (creates from existing branch if needed)"
-  echo "  rm    <project> <feature> [--delete-branch]   Remove a worktree"
-  echo "  merge <project> <feature> [--squash|--rebase] Merge PR, cleanup worktree & branch, pull main (default: merge commit)"
+  echo "  new   [project] <feature> [--base <branch>]   Create worktree, install deps, launch Claude"
+  echo "  cd    [project] [feature] [--nc]               Jump into worktree (creates from existing branch if needed)"
+  echo "  rm    [project] [feature] [--delete-branch]   Remove a worktree"
+  echo "  merge [project] [feature] [--squash|--rebase] Merge PR, cleanup worktree & branch, pull main (default: merge commit)"
   echo "  ls    [project]                               List worktrees with PR status"
   echo "  help                                          Show this help message"
+  echo ""
+  echo "Auto-detection:"
+  echo "  When inside a worktree or main repo, project and feature are auto-detected."
+  echo "  Explicit arguments always override auto-detected values."
   echo ""
   echo "Configuration:"
   echo "  Edit config.sh to add projects, set package managers, and change defaults."
   echo ""
   echo "Examples:"
   echo "  wt cd carousel fix-slider               Jump into worktree (or create from existing branch)"
+  echo "  wt cd fix-slider                         Same, if already inside a carousel worktree"
   echo "  wt cd carousel fix-slider --nc          Jump into worktree without starting Claude"
   echo "  wt new carousel fix-slider              Create worktree on new branch from main"
+  echo "  wt new fix-slider                        Same, if already inside a carousel worktree/repo"
   echo "  wt new carousel fix-slider --base dev   Create worktree branching from dev"
-  echo "  wt ls                                   List all worktrees with PR status"
+  echo "  wt merge                                 Merge current worktree's PR (auto-detected)"
   echo "  wt merge carousel fix-slider            Merge PR, delete branch, remove worktree"
   echo "  wt merge carousel fix-slider --squash   Squash-merge instead of merge commit"
+  echo "  wt rm                                    Remove current worktree (auto-detected)"
   echo "  wt rm carousel fix-slider               Remove worktree only"
   echo "  wt rm carousel fix-slider --delete-branch  Remove worktree and delete branch"
+  echo "  wt ls                                   List worktrees (filtered to current project if detected)"
+}
+
+# Auto-detect project and feature from current working directory.
+# Sets _wt_detected_project and _wt_detected_feature variables.
+_wt_detect_context() {
+  _wt_detected_project=""
+  _wt_detected_feature=""
+
+  # Check if we're inside a worktree: $WORKTREE_BASE/<project>/<feature>/...
+  if [[ "$PWD" == "$WORKTREE_BASE"/* ]]; then
+    local rel="${PWD#$WORKTREE_BASE/}"
+    _wt_detected_project="${rel%%/*}"
+    rel="${rel#*/}"
+    _wt_detected_feature="${rel%%/*}"
+    return
+  fi
+
+  # Check if we're inside a main repo directory
+  for p in "${(k)WT_PROJECTS[@]}"; do
+    if [[ "$PWD" == "${WT_PROJECTS[$p]}"* ]]; then
+      _wt_detected_project="$p"
+      return
+    fi
+  done
 }
 
 _wt_get_install_cmd() {
@@ -76,8 +108,19 @@ _wt_cd() {
     esac
   done
 
+  # Auto-detect from current directory
+  _wt_detect_context
+  if [[ -z "$feature" && -n "$project" && -n "$_wt_detected_project" && -z "${WT_PROJECTS[$project]}" ]]; then
+    # Single arg given and it's not a known project — treat as feature name
+    feature="$project"
+    project="$_wt_detected_project"
+  fi
+  [[ -z "$project" ]] && project="$_wt_detected_project"
+  [[ -z "$feature" ]] && feature="$_wt_detected_feature"
+
   if [[ -z "$project" || -z "$feature" ]]; then
     echo "Usage: wt cd <project> <feature> [--nc]"
+    echo "  (project and feature can be auto-detected from current directory)"
     return 1
   fi
 
@@ -164,8 +207,18 @@ _wt_new() {
     esac
   done
 
+  # Auto-detect from current directory
+  _wt_detect_context
+  if [[ -z "$feature" && -n "$project" && -n "$_wt_detected_project" && -z "${WT_PROJECTS[$project]}" ]]; then
+    # Single arg given and it's not a known project — treat as feature name
+    feature="$project"
+    project="$_wt_detected_project"
+  fi
+  [[ -z "$project" ]] && project="$_wt_detected_project"
+
   if [[ -z "$project" || -z "$feature" ]]; then
     echo "Usage: wt new <project> <feature> [--base <branch>]"
+    echo "  (project can be auto-detected from current directory)"
     return 1
   fi
 
@@ -248,8 +301,18 @@ _wt_rm() {
     esac
   done
 
+  # Auto-detect from current directory
+  _wt_detect_context
+  if [[ -z "$feature" && -n "$project" && -n "$_wt_detected_project" && -z "${WT_PROJECTS[$project]}" ]]; then
+    feature="$project"
+    project="$_wt_detected_project"
+  fi
+  [[ -z "$project" ]] && project="$_wt_detected_project"
+  [[ -z "$feature" ]] && feature="$_wt_detected_feature"
+
   if [[ -z "$project" || -z "$feature" ]]; then
     echo "Usage: wt rm <project> <feature> [--delete-branch]"
+    echo "  (project and feature can be auto-detected from current directory)"
     return 1
   fi
 
@@ -315,8 +378,18 @@ _wt_merge() {
     esac
   done
 
+  # Auto-detect from current directory
+  _wt_detect_context
+  if [[ -z "$feature" && -n "$project" && -n "$_wt_detected_project" && -z "${WT_PROJECTS[$project]}" ]]; then
+    feature="$project"
+    project="$_wt_detected_project"
+  fi
+  [[ -z "$project" ]] && project="$_wt_detected_project"
+  [[ -z "$feature" ]] && feature="$_wt_detected_feature"
+
   if [[ -z "$project" || -z "$feature" ]]; then
     echo "Usage: wt merge <project> <feature> [--squash|--rebase|--merge]"
+    echo "  (project and feature can be auto-detected from current directory)"
     return 1
   fi
 
@@ -375,6 +448,12 @@ _wt_merge() {
 
 _wt_ls() {
   local project="$1"
+
+  # Auto-detect from current directory
+  if [[ -z "$project" ]]; then
+    _wt_detect_context
+    project="$_wt_detected_project"
+  fi
 
   if [[ -n "$project" ]]; then
     _wt_ls_project "$project"
