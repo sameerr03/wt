@@ -9,6 +9,7 @@ wt() {
 
   case "$cmd" in
     new)    _wt_new "$@" ;;
+    issue)  _wt_issue "$@" ;;
     cd)     _wt_cd "$@" ;;
     rm)     _wt_rm "$@" ;;
     merge)  _wt_merge "$@" ;;
@@ -25,6 +26,7 @@ _wt_help() {
   echo ""
   echo "Commands:"
   echo "  new   [project] <feature> [--base <branch>]   Create worktree, install deps, launch Claude"
+  echo "  issue [project] <issue#> [--base <branch>]    Create worktree from GitHub issue, launch Claude with context"
   echo "  cd    [project] [feature] [--nc]               Jump into worktree (creates from existing branch if needed)"
   echo "  rm    [project] [feature] [--delete-branch]   Remove a worktree"
   echo "  merge [project] [feature] [--squash|--rebase] Merge PR, cleanup worktree & branch, pull main (default: merge commit)"
@@ -42,6 +44,8 @@ _wt_help() {
   echo "  wt cd carousel fix-slider               Jump into worktree (or create from existing branch)"
   echo "  wt cd fix-slider                         Same, if already inside a carousel worktree"
   echo "  wt cd carousel fix-slider --nc          Jump into worktree without starting Claude"
+  echo "  wt issue carousel 123                   Create worktree from issue #123, Claude starts with context"
+  echo "  wt issue 123                            Same, if already inside a carousel worktree/repo"
   echo "  wt new carousel fix-slider              Create worktree on new branch from main"
   echo "  wt new fix-slider                        Same, if already inside a carousel worktree/repo"
   echo "  wt new carousel fix-slider --base dev   Create worktree branching from dev"
@@ -76,6 +80,18 @@ _wt_detect_context() {
       return
     fi
   done
+}
+
+# Strip prefix from branch names containing slashes (e.g. "claude/fix-bug" -> "fix-bug")
+_wt_strip_branch_prefix() {
+  local branch="$1"
+  echo "${branch##*/}"
+}
+
+# Get the real branch name from a worktree directory via git
+_wt_get_branch() {
+  local wt_path="$1"
+  git -C "$wt_path" rev-parse --abbrev-ref HEAD 2>/dev/null
 }
 
 _wt_get_install_cmd() {
@@ -131,7 +147,8 @@ _wt_cd() {
     return 1
   fi
 
-  local wt_path="$WORKTREE_BASE/$project/$feature"
+  local feature_dir="$(_wt_strip_branch_prefix "$feature")"
+  local wt_path="$WORKTREE_BASE/$project/$feature_dir"
 
   if [[ ! -d "$wt_path" ]]; then
     # No worktree yet — check if branch exists and create worktree from it
@@ -229,7 +246,8 @@ _wt_new() {
     return 1
   fi
 
-  local wt_path="$WORKTREE_BASE/$project/$feature"
+  local feature_dir="$(_wt_strip_branch_prefix "$feature")"
+  local wt_path="$WORKTREE_BASE/$project/$feature_dir"
 
   if [[ -d "$wt_path" ]]; then
     echo "Error: Worktree already exists at $wt_path"
@@ -281,6 +299,134 @@ _wt_new() {
   claude
 }
 
+_wt_issue() {
+  local project="" issue_number="" base_branch="$DEFAULT_BASE_BRANCH"
+
+  # Parse args
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --base)
+        base_branch="$2"
+        shift 2
+        ;;
+      *)
+        if [[ -z "$project" ]]; then
+          project="$1"
+        elif [[ -z "$issue_number" ]]; then
+          issue_number="$1"
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  # Auto-detect from current directory
+  _wt_detect_context
+  if [[ -z "$issue_number" && -n "$project" && -n "$_wt_detected_project" && -z "${WT_PROJECTS[$project]}" ]]; then
+    # Single arg given and it's not a known project — treat as issue number
+    issue_number="$project"
+    project="$_wt_detected_project"
+  fi
+  [[ -z "$project" ]] && project="$_wt_detected_project"
+
+  if [[ -z "$project" || -z "$issue_number" ]]; then
+    echo "Usage: wt issue [project] <issue#> [--base <branch>]"
+    echo "  (project can be auto-detected from current directory)"
+    return 1
+  fi
+
+  local repo_path="${WT_PROJECTS[$project]}"
+  if [[ -z "$repo_path" ]]; then
+    echo "Error: Unknown project '$project'"
+    echo "Available projects: ${(k)WT_PROJECTS}"
+    return 1
+  fi
+
+  local remote_url
+  remote_url=$(git -C "$repo_path" remote get-url origin 2>/dev/null)
+
+  # Fetch issue details from GitHub
+  echo "Fetching issue #$issue_number..."
+  local issue_json
+  issue_json=$(gh issue view "$issue_number" --repo "$remote_url" --json title,body,labels 2>/dev/null)
+
+  if [[ $? -ne 0 || -z "$issue_json" ]]; then
+    echo "Error: Could not fetch issue #$issue_number from $remote_url"
+    return 1
+  fi
+
+  local title body labels
+  title=$(echo "$issue_json" | jq -r '.title')
+  body=$(echo "$issue_json" | jq -r '.body')
+  labels=$(echo "$issue_json" | jq -r '[.labels[].name] | join(", ")')
+  [[ -z "$labels" ]] && labels="none"
+
+  # Slugify the title into a branch name
+  local feature
+  feature=$(echo "$title" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//' | sed 's/-$//' | cut -c1-60)
+
+  echo "Issue: #$issue_number — $title"
+  echo "Branch: $feature"
+
+  local feature_dir="$(_wt_strip_branch_prefix "$feature")"
+  local wt_path="$WORKTREE_BASE/$project/$feature_dir"
+
+  if [[ -d "$wt_path" ]]; then
+    echo "Error: Worktree already exists at $wt_path"
+    return 1
+  fi
+
+  # Create project dir under worktrees if needed
+  mkdir -p "$WORKTREE_BASE/$project"
+
+  echo "Creating worktree for $project/$feature (base: $base_branch)..."
+
+  # Fetch latest and create branch + worktree
+  git -C "$repo_path" fetch origin "$base_branch" 2>/dev/null
+  if ! git -C "$repo_path" worktree add -b "$feature" "$wt_path" "origin/$base_branch" 2>/dev/null; then
+    if ! git -C "$repo_path" worktree add "$wt_path" "$feature" 2>/dev/null; then
+      echo "Error: Failed to create worktree. Does the branch '$feature' already exist and is checked out elsewhere?"
+      return 1
+    fi
+  fi
+
+  echo "Worktree created at $wt_path"
+
+  # Copy env files
+  local env_count=0
+  for env_file in "$repo_path"/.env*; do
+    if [[ -f "$env_file" ]]; then
+      cp "$env_file" "$wt_path/"
+      env_count=$((env_count + 1))
+    fi
+  done
+  echo "Copied $env_count env file(s)"
+
+  # Install dependencies
+  local install_cmd="$(_wt_get_install_cmd "$project")"
+  echo "Running $install_cmd..."
+  (cd "$wt_path" && eval "$install_cmd")
+
+  if [[ $? -ne 0 ]]; then
+    echo "Warning: $install_cmd failed. You may need to run it manually."
+  fi
+
+  # Build the prompt from the template
+  local prompt="$WT_ISSUE_PROMPT"
+  prompt="${prompt//\{\{number\}\}/$issue_number}"
+  prompt="${prompt//\{\{title\}\}/$title}"
+  prompt="${prompt//\{\{labels\}\}/$labels}"
+  prompt="${prompt//\{\{body\}\}/$body}"
+
+  echo ""
+  echo "Ready! Entering worktree and launching Claude Code with issue context..."
+  echo "---"
+
+  # cd into worktree and launch claude with issue context
+  cd "$wt_path"
+  claude "$prompt"
+}
+
 _wt_rm() {
   local project="" feature="" delete_branch=false
 
@@ -322,19 +468,23 @@ _wt_rm() {
     return 1
   fi
 
-  local wt_path="$WORKTREE_BASE/$project/$feature"
+  local feature_dir="$(_wt_strip_branch_prefix "$feature")"
+  local wt_path="$WORKTREE_BASE/$project/$feature_dir"
 
   if [[ ! -d "$wt_path" ]]; then
     echo "Error: No worktree found at $wt_path"
     return 1
   fi
 
+  # Get real branch name from the worktree before removing it
+  local branch_name="$(_wt_get_branch "$wt_path")"
+
   # If we're inside the worktree, move out first
   if [[ "$PWD" == "$wt_path"* ]]; then
     cd "$repo_path"
   fi
 
-  echo "Removing worktree $project/$feature..."
+  echo "Removing worktree $project/$feature_dir..."
   git -C "$repo_path" worktree remove "$wt_path" --force
 
   # Clean up the directory if it somehow still exists
@@ -343,8 +493,8 @@ _wt_rm() {
   fi
 
   if $delete_branch; then
-    echo "Deleting branch '$feature'..."
-    git -C "$repo_path" branch -D "$feature" 2>/dev/null
+    echo "Deleting branch '$branch_name'..."
+    git -C "$repo_path" branch -D "$branch_name" 2>/dev/null
   fi
 
   echo "Done."
@@ -399,18 +549,26 @@ _wt_merge() {
     return 1
   fi
 
-  local wt_path="$WORKTREE_BASE/$project/$feature"
+  local feature_dir="$(_wt_strip_branch_prefix "$feature")"
+  local wt_path="$WORKTREE_BASE/$project/$feature_dir"
+
+  # Get real branch name from the worktree if it exists
+  local branch_name="$feature"
+  if [[ -d "$wt_path" ]]; then
+    local detected_branch="$(_wt_get_branch "$wt_path")"
+    [[ -n "$detected_branch" ]] && branch_name="$detected_branch"
+  fi
 
   # Check if there's a PR for this branch
   local pr_number
-  pr_number=$(gh pr list --repo "$(git -C "$repo_path" remote get-url origin)" --head "$feature" --json number --jq '.[0].number' 2>/dev/null)
+  pr_number=$(gh pr list --repo "$(git -C "$repo_path" remote get-url origin)" --head "$branch_name" --json number --jq '.[0].number' 2>/dev/null)
 
   if [[ -z "$pr_number" ]]; then
-    echo "Error: No open PR found for branch '$feature'"
+    echo "Error: No open PR found for branch '$branch_name'"
     return 1
   fi
 
-  echo "Merging PR #$pr_number for $project/$feature ($merge_strategy)..."
+  echo "Merging PR #$pr_number for $project/$branch_name ($merge_strategy)..."
 
   # Move out of worktree if we're in it
   if [[ "$PWD" == "$wt_path"* ]]; then
@@ -427,7 +585,7 @@ _wt_merge() {
   fi
 
   # Delete local branch (now safe since worktree is gone)
-  git -C "$repo_path" branch -D "$feature" 2>/dev/null
+  git -C "$repo_path" branch -D "$branch_name" 2>/dev/null
 
   # Merge the PR via gh CLI (deletes remote branch)
   local remote_url
@@ -491,8 +649,12 @@ _wt_ls_project() {
     name="${d:t}"
     pr_info=""
 
+    # Get real branch name from the worktree for PR lookup
+    local branch_name="$(_wt_get_branch "$d")"
+    [[ -z "$branch_name" ]] && branch_name="$name"
+
     if [[ -n "$remote_url" ]]; then
-      pr_num=$(gh pr list --repo "$remote_url" --head "$name" --json number --jq '.[0].number' 2>/dev/null)
+      pr_num=$(gh pr list --repo "$remote_url" --head "$branch_name" --json number --jq '.[0].number' 2>/dev/null)
 
       if [[ -n "$pr_num" && "$pr_num" != "null" ]]; then
         pr_info="  PR #$pr_num"

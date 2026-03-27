@@ -79,6 +79,16 @@ wt new fix-slider              # project auto-detected from current directory
 wt new carousel fix-slider --base dev
 ```
 
+### `wt issue [project] <issue#> [--base <branch>]`
+
+Creates a worktree from a GitHub issue. Fetches the issue title and body, slugifies the title into a branch name, creates the worktree, and launches Claude Code with the issue context pre-loaded for a discuss-then-plan workflow.
+
+```bash
+wt issue carousel 123
+wt issue 123                   # project auto-detected from current directory
+wt issue carousel 123 --base dev
+```
+
 ### `wt cd [project] [feature] [--nc]`
 
 Jumps into a worktree and continues the most recent Claude Code session. If no worktree exists but the branch does (locally or on the remote), it automatically creates the worktree, copies `.env` files, installs dependencies, and resumes the session.
@@ -137,6 +147,7 @@ All config lives in `config.sh`:
 | `WORKTREE_BASE` | Where worktrees are created | `$HOME/Code/worktrees` |
 | `DEFAULT_BASE_BRANCH` | Branch to base new worktrees on | `main` |
 | `DEFAULT_INSTALL_CMD` | Default install command | `npm install` |
+| `WT_ISSUE_PROMPT` | Prompt template for `wt issue` | discuss-then-plan template |
 
 ## Requirements
 
