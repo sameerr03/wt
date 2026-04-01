@@ -22,40 +22,15 @@ wt() {
 _wt_help() {
   echo "wt — Git worktree manager for Claude Code workflows"
   echo ""
-  echo "Usage: wt <command> [args]"
-  echo ""
   echo "Commands:"
-  echo "  new   [project] <feature> [--base <branch>]   Create worktree, install deps, launch Claude"
-  echo "  issue [project] <issue#> [--base <branch>]    Create worktree from GitHub issue, launch Claude with context"
-  echo "  cd    [project] [feature] [--nc]               Jump into worktree (creates from existing branch if needed)"
-  echo "  rm    [project] [feature] [--delete-branch]   Remove a worktree"
-  echo "  merge [project] [feature] [--squash|--rebase] Merge PR, cleanup worktree & branch, pull main (default: merge commit)"
-  echo "  ls    [project]                               List worktrees with PR status"
-  echo "  help                                          Show this help message"
+  echo "  new   [--base <branch>]        Pick project, name feature, create worktree"
+  echo "  issue [project] <issue#>       Create worktree from GitHub issue"
+  echo "  cd                             Pick worktree to jump into"
+  echo "  rm                             Pick worktree to remove"
+  echo "  merge [--squash|--rebase]      Merge current worktree's PR and cleanup"
+  echo "  ls    [project]                List worktrees with PR status"
   echo ""
-  echo "Auto-detection:"
-  echo "  When inside a worktree or main repo, project and feature are auto-detected."
-  echo "  Explicit arguments always override auto-detected values."
-  echo ""
-  echo "Configuration:"
-  echo "  Edit config.sh to add projects, set package managers, and change defaults."
-  echo ""
-  echo "Examples:"
-  echo "  wt cd carousel fix-slider               Jump into worktree (or create from existing branch)"
-  echo "  wt cd fix-slider                         Same, if already inside a carousel worktree"
-  echo "  wt cd carousel fix-slider --nc          Jump into worktree without starting Claude"
-  echo "  wt issue carousel 123                   Create worktree from issue #123, Claude starts with context"
-  echo "  wt issue 123                            Same, if already inside a carousel worktree/repo"
-  echo "  wt new carousel fix-slider              Create worktree on new branch from main"
-  echo "  wt new fix-slider                        Same, if already inside a carousel worktree/repo"
-  echo "  wt new carousel fix-slider --base dev   Create worktree branching from dev"
-  echo "  wt merge                                 Merge current worktree's PR (auto-detected)"
-  echo "  wt merge carousel fix-slider            Merge PR, delete branch, remove worktree"
-  echo "  wt merge carousel fix-slider --squash   Squash-merge instead of merge commit"
-  echo "  wt rm                                    Remove current worktree (auto-detected)"
-  echo "  wt rm carousel fix-slider               Remove worktree only"
-  echo "  wt rm carousel fix-slider --delete-branch  Remove worktree and delete branch"
-  echo "  wt ls                                   List worktrees (filtered to current project if detected)"
+  echo "Requires: fzf (brew install fzf)"
 }
 
 # Auto-detect project and feature from current working directory.
@@ -103,146 +78,88 @@ _wt_get_install_cmd() {
   fi
 }
 
-_wt_cd() {
-  local project="" feature="" launch_claude=true
+_wt_has_fzf() {
+  command -v fzf &>/dev/null
+}
 
-  # Parse args
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --nc)
-        launch_claude=false
-        shift
-        ;;
-      *)
-        if [[ -z "$project" ]]; then
-          project="$1"
-        elif [[ -z "$feature" ]]; then
-          feature="$1"
-        fi
-        shift
-        ;;
-    esac
-  done
-
-  # Auto-detect from current directory
-  _wt_detect_context
-  if [[ -z "$feature" && -n "$project" && -n "$_wt_detected_project" && -z "${WT_PROJECTS[$project]}" ]]; then
-    # Single arg given and it's not a known project — treat as feature name
-    feature="$project"
-    project="$_wt_detected_project"
-  fi
-  [[ -z "$project" ]] && project="$_wt_detected_project"
-  [[ -z "$feature" ]] && feature="$_wt_detected_feature"
-
-  if [[ -z "$project" || -z "$feature" ]]; then
-    echo "Usage: wt cd <project> <feature> [--nc]"
-    echo "  (project and feature can be auto-detected from current directory)"
+# Interactive project picker via fzf. Sets the variable named by $1.
+_wt_pick_project() {
+  local -n _out=$1
+  if ! _wt_has_fzf; then
+    echo "Error: fzf required for interactive project picker (brew install fzf)" >&2
     return 1
   fi
+  _out=$(printf '%s\n' "${(k)WT_PROJECTS[@]}" | fzf --prompt="Project: " --height=~10 --reverse)
+  [[ -n "$_out" ]]
+}
 
-  local repo_path="${WT_PROJECTS[$project]}"
-  if [[ -z "$repo_path" ]]; then
-    echo "Error: Unknown project '$project'"
-    echo "Available projects: ${(k)WT_PROJECTS}"
+# Interactive worktree picker via fzf. Returns "project/feature" to stdout.
+_wt_pick_worktree() {
+  if ! _wt_has_fzf; then
+    echo "Error: fzf required for interactive worktree picker (brew install fzf)" >&2
     return 1
   fi
-
-  local feature_dir="$(_wt_strip_branch_prefix "$feature")"
-  local wt_path="$WORKTREE_BASE/$project/$feature_dir"
-
-  if [[ ! -d "$wt_path" ]]; then
-    # No worktree yet — check if branch exists and create worktree from it
-    echo "No worktree found. Looking for existing branch '$feature'..."
-
-    git -C "$repo_path" fetch origin 2>/dev/null
-
-    # Check if branch exists locally or on remote
-    if ! git -C "$repo_path" show-ref --verify --quiet "refs/heads/$feature" && \
-       ! git -C "$repo_path" show-ref --verify --quiet "refs/remotes/origin/$feature"; then
-      echo "Error: Branch '$feature' not found locally or on remote"
-      return 1
-    fi
-
-    mkdir -p "$WORKTREE_BASE/$project"
-
-    echo "Creating worktree for $project/$feature from existing branch..."
-    if ! git -C "$repo_path" worktree add "$wt_path" "$feature" 2>/dev/null; then
-      echo "Error: Failed to create worktree for branch '$feature'"
-      return 1
-    fi
-
-    echo "Worktree created at $wt_path"
-
-    # Copy env files
-    local env_count=0
-    for env_file in "$repo_path"/.env*; do
-      if [[ -f "$env_file" ]]; then
-        cp "$env_file" "$wt_path/"
-        env_count=$((env_count + 1))
-      fi
+  local entries=()
+  for p in "${(k)WT_PROJECTS[@]}"; do
+    local wt_dir="$WORKTREE_BASE/$p"
+    [[ -d "$wt_dir" ]] || continue
+    for d in "$wt_dir"/*(N/); do
+      local name="${d:t}"
+      entries+=("$p/$name")
     done
-    echo "Copied $env_count env file(s)"
-
-    # Install dependencies
-    local install_cmd="$(_wt_get_install_cmd "$project")"
-    echo "Running $install_cmd..."
-    (cd "$wt_path" && eval "$install_cmd")
-
-    if [[ $? -ne 0 ]]; then
-      echo "Warning: $install_cmd failed. You may need to run it manually."
-    fi
-
-    echo ""
-    echo "Ready! Entering worktree and resuming Claude Code..."
-    echo "---"
+  done
+  if [[ ${#entries[@]} -eq 0 ]]; then
+    echo "No active worktrees." >&2
+    return 1
   fi
+  printf '%s\n' "${entries[@]}" | fzf --prompt="Worktree: " --height=~10 --reverse
+}
 
-  cd "$wt_path"
-  if $launch_claude; then
+_wt_cd() {
+  # Pick a worktree via fzf
+  local selection
+  selection=$(_wt_pick_worktree) || return 1
+  local project="${selection%%/*}"
+  local feature="${selection#*/}"
+
+  cd "$WORKTREE_BASE/$project/$feature"
+
+  printf "Launch Claude? [Y/n] "
+  local confirm
+  read -r confirm
+  if [[ "$confirm" != [nN] ]]; then
     claude --continue
   fi
 }
 
 _wt_new() {
-  local project="" feature="" base_branch="$DEFAULT_BASE_BRANCH"
-
-  # Parse args
+  local base_branch="$DEFAULT_BASE_BRANCH"
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --base)
-        base_branch="$2"
-        shift 2
-        ;;
-      *)
-        if [[ -z "$project" ]]; then
-          project="$1"
-        elif [[ -z "$feature" ]]; then
-          feature="$1"
-        fi
-        shift
-        ;;
+      --base) base_branch="$2"; shift 2 ;;
+      *)      shift ;;
     esac
   done
 
-  # Auto-detect from current directory
+  # Pick project (auto-detect or fzf)
   _wt_detect_context
-  if [[ -z "$feature" && -n "$project" && -n "$_wt_detected_project" && -z "${WT_PROJECTS[$project]}" ]]; then
-    # Single arg given and it's not a known project — treat as feature name
-    feature="$project"
-    project="$_wt_detected_project"
-  fi
-  [[ -z "$project" ]] && project="$_wt_detected_project"
-
-  if [[ -z "$project" || -z "$feature" ]]; then
-    echo "Usage: wt new <project> <feature> [--base <branch>]"
-    echo "  (project can be auto-detected from current directory)"
-    return 1
+  local project="$_wt_detected_project"
+  if [[ -z "$project" ]]; then
+    _wt_pick_project project || return 1
   fi
 
   local repo_path="${WT_PROJECTS[$project]}"
   if [[ -z "$repo_path" ]]; then
     echo "Error: Unknown project '$project'"
-    echo "Available projects: ${(k)WT_PROJECTS}"
+    return 1
+  fi
+
+  # Prompt for feature name
+  printf "Feature name: "
+  local feature
+  read -r feature
+  if [[ -z "$feature" ]]; then
+    echo "Error: Feature name required"
     return 1
   fi
 
@@ -435,39 +352,11 @@ _wt_issue() {
 }
 
 _wt_rm() {
-  local project="" feature="" delete_branch=false
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --delete-branch)
-        delete_branch=true
-        shift
-        ;;
-      *)
-        if [[ -z "$project" ]]; then
-          project="$1"
-        elif [[ -z "$feature" ]]; then
-          feature="$1"
-        fi
-        shift
-        ;;
-    esac
-  done
-
-  # Auto-detect from current directory
-  _wt_detect_context
-  if [[ -z "$feature" && -n "$project" && -n "$_wt_detected_project" && -z "${WT_PROJECTS[$project]}" ]]; then
-    feature="$project"
-    project="$_wt_detected_project"
-  fi
-  [[ -z "$project" ]] && project="$_wt_detected_project"
-  [[ -z "$feature" ]] && feature="$_wt_detected_feature"
-
-  if [[ -z "$project" || -z "$feature" ]]; then
-    echo "Usage: wt rm <project> <feature> [--delete-branch]"
-    echo "  (project and feature can be auto-detected from current directory)"
-    return 1
-  fi
+  # Pick a worktree via fzf
+  local selection
+  selection=$(_wt_pick_worktree) || return 1
+  local project="${selection%%/*}"
+  local feature="${selection#*/}"
 
   local repo_path="${WT_PROJECTS[$project]}"
   if [[ -z "$repo_path" ]]; then
@@ -475,8 +364,7 @@ _wt_rm() {
     return 1
   fi
 
-  local feature_dir="$(_wt_strip_branch_prefix "$feature")"
-  local wt_path="$WORKTREE_BASE/$project/$feature_dir"
+  local wt_path="$WORKTREE_BASE/$project/$feature"
 
   if [[ ! -d "$wt_path" ]]; then
     echo "Error: No worktree found at $wt_path"
@@ -491,7 +379,7 @@ _wt_rm() {
     cd "$repo_path"
   fi
 
-  echo "Removing worktree $project/$feature_dir..."
+  echo "Removing worktree $project/$feature..."
   git -C "$repo_path" worktree remove "$wt_path" --force
 
   # Clean up the directory if it somehow still exists
@@ -499,7 +387,11 @@ _wt_rm() {
     rm -rf "$wt_path"
   fi
 
-  if $delete_branch; then
+  printf "Delete branch '$branch_name'? [y/N] "
+  local confirm
+  read -r confirm
+
+  if [[ "$confirm" == [yY] ]]; then
     echo "Deleting branch '$branch_name'..."
     git -C "$repo_path" branch -D "$branch_name" 2>/dev/null
   fi
@@ -508,45 +400,24 @@ _wt_rm() {
 }
 
 _wt_merge() {
-  local project="" feature="" merge_strategy="--merge"
+  local merge_strategy="--merge"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --squash)
-        merge_strategy="--squash"
-        shift
-        ;;
-      --rebase)
-        merge_strategy="--rebase"
-        shift
-        ;;
-      --merge)
-        merge_strategy="--merge"
-        shift
-        ;;
-      *)
-        if [[ -z "$project" ]]; then
-          project="$1"
-        elif [[ -z "$feature" ]]; then
-          feature="$1"
-        fi
-        shift
-        ;;
+      --squash)  merge_strategy="--squash"; shift ;;
+      --rebase)  merge_strategy="--rebase"; shift ;;
+      --merge)   merge_strategy="--merge"; shift ;;
+      *)         shift ;;
     esac
   done
 
-  # Auto-detect from current directory
+  # Auto-detect from current directory — must be in a worktree
   _wt_detect_context
-  if [[ -z "$feature" && -n "$project" && -n "$_wt_detected_project" && -z "${WT_PROJECTS[$project]}" ]]; then
-    feature="$project"
-    project="$_wt_detected_project"
-  fi
-  [[ -z "$project" ]] && project="$_wt_detected_project"
-  [[ -z "$feature" ]] && feature="$_wt_detected_feature"
+  local project="$_wt_detected_project"
+  local feature="$_wt_detected_feature"
 
   if [[ -z "$project" || -z "$feature" ]]; then
-    echo "Usage: wt merge <project> <feature> [--squash|--rebase|--merge]"
-    echo "  (project and feature can be auto-detected from current directory)"
+    echo "Error: Must be inside a worktree to run wt merge"
     return 1
   fi
 
