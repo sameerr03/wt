@@ -356,14 +356,21 @@ _wt_issue() {
   fi
 
   local title body labels
-  title=$(echo "$issue_json" | jq -r '.title')
-  body=$(echo "$issue_json" | jq -r '.body')
-  labels=$(echo "$issue_json" | jq -r '[.labels[].name] | join(", ")')
+  title=$(printf '%s' "$issue_json" | jq -r '.title')
+  body=$(printf '%s' "$issue_json" | jq -r '.body')
+  labels=$(printf '%s' "$issue_json" | jq -r '[.labels[].name] | join(", ")')
   [[ -z "$labels" ]] && labels="none"
 
-  # Slugify the title into a branch name
+  # Generate a compact branch name from the issue title via Claude
   local feature
-  feature=$(echo "$title" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//' | sed 's/-$//' | cut -c1-60)
+  feature=$(claude -p "Generate a short git branch name (max 20 chars, lowercase, hyphens only, no leading/trailing hyphens) that captures the essence of this issue title. Output ONLY the branch name, nothing else: $title" 2>/dev/null)
+  # Sanitize in case the model returns unexpected characters
+  feature=$(echo "$feature" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g' | sed 's/--*/-/g' | sed 's/^-//' | sed 's/-$//' | cut -c1-20 | sed 's/-$//')
+
+  if [[ -z "$feature" ]]; then
+    echo "Error: Could not parse issue title for branch name"
+    return 1
+  fi
 
   echo "Issue: #$issue_number — $title"
   echo "Branch: $feature"
