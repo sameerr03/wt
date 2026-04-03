@@ -84,13 +84,13 @@ _wt_has_fzf() {
 
 # Interactive project picker via fzf. Sets the variable named by $1.
 _wt_pick_project() {
-  local -n _out=$1
   if ! _wt_has_fzf; then
     echo "Error: fzf required for interactive project picker (brew install fzf)" >&2
     return 1
   fi
-  _out=$(printf '%s\n' "${(k)WT_PROJECTS[@]}" | fzf --prompt="Project: " --height=~10 --reverse)
-  [[ -n "$_out" ]]
+  local _picked
+  _picked=$(printf '%s\n' "${(k)WT_PROJECTS[@]}" | fzf --prompt="Project: " --height=~10 --reverse)
+  [[ -n "$_picked" ]] && echo "$_picked"
 }
 
 # Interactive worktree picker via fzf. Returns "project/feature" to stdout.
@@ -145,7 +145,7 @@ _wt_new() {
   _wt_detect_context
   local project="$_wt_detected_project"
   if [[ -z "$project" ]]; then
-    _wt_pick_project project || return 1
+    project=$(_wt_pick_project) || return 1
   fi
 
   local repo_path="${WT_PROJECTS[$project]}"
