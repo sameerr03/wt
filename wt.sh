@@ -280,9 +280,9 @@ _wt_issue() {
 
   # Generate a compact branch name from the issue title via Claude
   local feature
-  feature=$(claude -p "Generate a short git branch name (max 20 chars, lowercase, hyphens only, no leading/trailing hyphens) that captures the essence of this issue title. Output ONLY the branch name, nothing else: $title" 2>/dev/null)
+  feature=$(claude -p "Generate a concise git branch name (lowercase, hyphens only, no leading/trailing hyphens) that captures the essence of this issue title. Output ONLY the branch name, nothing else: $title" 2>/dev/null)
   # Sanitize in case the model returns unexpected characters
-  feature=$(echo "$feature" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g' | sed 's/--*/-/g' | sed 's/^-//' | sed 's/-$//' | cut -c1-20 | sed 's/-$//')
+  feature=$(echo "$feature" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g' | sed 's/--*/-/g' | sed 's/^-//' | sed 's/-$//')
 
   if [[ -z "$feature" ]]; then
     echo "Error: Could not parse issue title for branch name"
