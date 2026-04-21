@@ -14,21 +14,28 @@ wt() {
     rm)     _wt_rm "$@" ;;
     merge)  _wt_merge "$@" ;;
     ls)     _wt_ls "$@" ;;
+    stash)  _wt_stash "$@" ;;
+    pop)    _wt_pop "$@" ;;
     help)   _wt_help ;;
     *)      _wt_help; return 1 ;;
   esac
 }
 
+WT_STASH_FILE="$HOME/.wt_stash"
+
 _wt_help() {
-  echo "wt — Git worktree manager for Claude Code workflows"
+  echo "wt — Git worktree manager for coding-agent workflows"
   echo ""
   echo "Commands:"
-  echo "  new   [--base <branch>]        Pick project, name feature, create worktree"
-  echo "  issue [project] <issue#>       Create worktree from GitHub issue"
-  echo "  cd                             Pick worktree to jump into"
+  echo "  new   [--base <branch>] [--agent codex|claude]   Pick project, name feature, create worktree"
+  echo "  issue [project] <issue#> [--base <branch>] [--agent codex|claude]"
+  echo "                                 Create worktree from GitHub issue"
+  echo "  cd    [--agent codex|claude]   Pick worktree to jump into"
   echo "  rm                             Pick worktree to remove"
   echo "  merge [--squash|--rebase]      Merge current worktree's PR and cleanup"
   echo "  ls    [project]                List worktrees with PR status"
+  echo "  stash                          Remember current worktree + agent, cd out"
+  echo "  pop                            cd back into stashed worktree and resume agent"
   echo ""
   echo "Requires: fzf (brew install fzf)"
 }
@@ -82,6 +89,104 @@ _wt_has_fzf() {
   command -v fzf &>/dev/null
 }
 
+_wt_resolve_agent() {
+  local agent="${1:-${WT_CLI_AGENT:-codex}}"
+  case "$agent" in
+    codex|claude)
+      echo "$agent"
+      ;;
+    *)
+      echo "Error: Unsupported agent '$agent' (expected codex or claude)" >&2
+      return 1
+      ;;
+  esac
+}
+
+_wt_agent_label() {
+  case "$1" in
+    codex) echo "Codex" ;;
+    claude) echo "Claude Code" ;;
+  esac
+}
+
+_wt_require_agent() {
+  local agent="$1"
+  if ! command -v "$agent" &>/dev/null; then
+    echo "Error: '$agent' is not installed or not on PATH" >&2
+    return 1
+  fi
+}
+
+_wt_continue_agent() {
+  local agent="$1"
+  case "$agent" in
+    codex) codex resume --last ;;
+    claude) claude --continue ;;
+  esac
+}
+
+_wt_launch_agent() {
+  local agent="$1"
+  local prompt="$2"
+  case "$agent" in
+    codex)
+      if [[ -n "$prompt" ]]; then
+        codex "$prompt"
+      else
+        codex
+      fi
+      ;;
+    claude)
+      if [[ -n "$prompt" ]]; then
+        claude "$prompt"
+      else
+        claude
+      fi
+      ;;
+  esac
+}
+
+_wt_generate_branch_name() {
+  local agent="$1"
+  local title="$2"
+  local prompt="Generate a concise git branch name for this GitHub issue title.
+
+Requirements:
+- lowercase only
+- words separated by single hyphens
+- no slashes
+- no prefixes like feat/ fix/ chore/
+- no leading or trailing hyphens
+- keep it short but descriptive
+- output only the branch name, with no explanation or formatting
+
+Issue title: $title"
+  local feature=""
+
+  case "$agent" in
+    codex)
+      feature=$(codex exec --skip-git-repo-check "$prompt" 2>/dev/null)
+      ;;
+    claude)
+      feature=$(claude -p "$prompt" 2>/dev/null)
+      ;;
+  esac
+
+  feature=$(printf '%s' "$feature" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed 's/[^a-z0-9-]//g' \
+    | sed 's/--*/-/g' \
+    | sed 's/^-//' \
+    | sed 's/-$//')
+
+  if [[ -z "$feature" ]]; then
+    echo "Error: Could not generate branch name with $(_wt_agent_label "$agent")" >&2
+    return 1
+  fi
+
+  echo "$feature"
+}
+
 # Interactive project picker via fzf. Sets the variable named by $1.
 _wt_pick_project() {
   if ! _wt_has_fzf; then
@@ -115,7 +220,32 @@ _wt_pick_worktree() {
   printf '%s\n' "${entries[@]}" | fzf --prompt="Worktree: " --height=~10 --reverse
 }
 
+_wt_require_option_value() {
+  local option="$1"
+  local value="$2"
+  if [[ -z "$value" ]]; then
+    echo "Error: $option requires a value" >&2
+    return 1
+  fi
+}
+
 _wt_cd() {
+  local agent
+  agent=$(_wt_resolve_agent) || return 1
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --agent)
+        _wt_require_option_value "$1" "$2" || return 1
+        agent=$(_wt_resolve_agent "$2") || return 1
+        shift 2
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+
   # Pick a worktree via fzf
   local selection
   selection=$(_wt_pick_worktree) || return 1
@@ -124,19 +254,35 @@ _wt_cd() {
 
   cd "$WORKTREE_BASE/$project/$feature"
 
-  printf "Launch Claude? [Y/n] "
+  _wt_require_agent "$agent" || return 1
+
+  local agent_label
+  agent_label=$(_wt_agent_label "$agent")
+  printf "Launch %s? [Y/n] " "$agent_label"
   local confirm
   read -r confirm
   if [[ "$confirm" != [nN] ]]; then
-    claude --continue
+    _wt_continue_agent "$agent"
   fi
 }
 
 _wt_new() {
   local base_branch="$DEFAULT_BASE_BRANCH"
+  local agent
+  agent=$(_wt_resolve_agent) || return 1
+
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --base) base_branch="$2"; shift 2 ;;
+      --base)
+        _wt_require_option_value "$1" "$2" || return 1
+        base_branch="$2"
+        shift 2
+        ;;
+      --agent)
+        _wt_require_option_value "$1" "$2" || return 1
+        agent=$(_wt_resolve_agent "$2") || return 1
+        shift 2
+        ;;
       *)      shift ;;
     esac
   done
@@ -153,6 +299,8 @@ _wt_new() {
     echo "Error: Unknown project '$project'"
     return 1
   fi
+
+  _wt_require_agent "$agent" || return 1
 
   # Prompt for feature name
   printf "Feature name: "
@@ -208,22 +356,31 @@ _wt_new() {
   fi
 
   echo ""
-  echo "Ready! Entering worktree and launching Claude Code..."
+  local agent_label
+  agent_label=$(_wt_agent_label "$agent")
+  echo "Ready! Entering worktree and launching $agent_label..."
   echo "---"
 
-  # cd into worktree and launch claude
   cd "$wt_path"
-  claude
+  _wt_launch_agent "$agent"
 }
 
 _wt_issue() {
   local project="" issue_number="" base_branch="$DEFAULT_BASE_BRANCH"
+  local agent
+  agent=$(_wt_resolve_agent) || return 1
 
   # Parse args
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --base)
+        _wt_require_option_value "$1" "$2" || return 1
         base_branch="$2"
+        shift 2
+        ;;
+      --agent)
+        _wt_require_option_value "$1" "$2" || return 1
+        agent=$(_wt_resolve_agent "$2") || return 1
         shift 2
         ;;
       *)
@@ -259,6 +416,8 @@ _wt_issue() {
     return 1
   fi
 
+  _wt_require_agent "$agent" || return 1
+
   local remote_url
   remote_url=$(git -C "$repo_path" remote get-url origin 2>/dev/null)
 
@@ -278,16 +437,8 @@ _wt_issue() {
   labels=$(printf '%s' "$issue_json" | jq -r '[.labels[].name] | join(", ")')
   [[ -z "$labels" ]] && labels="none"
 
-  # Generate a compact branch name from the issue title via Claude
   local feature
-  feature=$(claude -p "Generate a concise git branch name (lowercase, hyphens only, no leading/trailing hyphens) that captures the essence of this issue title. Output ONLY the branch name, nothing else: $title" 2>/dev/null)
-  # Sanitize in case the model returns unexpected characters
-  feature=$(echo "$feature" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g' | sed 's/--*/-/g' | sed 's/^-//' | sed 's/-$//')
-
-  if [[ -z "$feature" ]]; then
-    echo "Error: Could not parse issue title for branch name"
-    return 1
-  fi
+  feature=$(_wt_generate_branch_name "$agent" "$title") || return 1
 
   echo "Issue: #$issue_number — $title"
   echo "Branch: $feature"
@@ -343,12 +494,13 @@ _wt_issue() {
   prompt="${prompt//\{\{body\}\}/$body}"
 
   echo ""
-  echo "Ready! Entering worktree and launching Claude Code with issue context..."
+  local agent_label
+  agent_label=$(_wt_agent_label "$agent")
+  echo "Ready! Entering worktree and launching $agent_label with issue context..."
   echo "---"
 
-  # cd into worktree and launch claude with issue context
   cd "$wt_path"
-  claude "$prompt"
+  _wt_launch_agent "$agent" "$prompt"
 }
 
 _wt_rm() {
@@ -480,6 +632,74 @@ _wt_merge() {
 
   cd "$repo_path"
   echo "Done. PR #$pr_number merged, branch deleted, worktree cleaned up."
+}
+
+_wt_stash() {
+  _wt_detect_context
+  local project="$_wt_detected_project"
+  local feature="$_wt_detected_feature"
+
+  if [[ -z "$project" || -z "$feature" ]]; then
+    echo "Error: Must be inside a worktree to run wt stash" >&2
+    return 1
+  fi
+
+  local feature_dir="$(_wt_strip_branch_prefix "$feature")"
+  local wt_path="$WORKTREE_BASE/$project/$feature_dir"
+
+  local agent
+  agent=$(_wt_resolve_agent) || return 1
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --agent)
+        _wt_require_option_value "$1" "$2" || return 1
+        agent=$(_wt_resolve_agent "$2") || return 1
+        shift 2
+        ;;
+      *) shift ;;
+    esac
+  done
+
+  if [[ -f "$WT_STASH_FILE" ]]; then
+    local existing_path
+    existing_path=$(sed -n '1p' "$WT_STASH_FILE")
+    printf "Stash already holds %s. Overwrite? [y/N] " "$existing_path"
+    local confirm
+    read -r confirm
+    [[ "$confirm" == [yY] ]] || { echo "Aborted."; return 1; }
+  fi
+
+  printf '%s\n%s\n' "$wt_path" "$agent" > "$WT_STASH_FILE"
+
+  echo "Stashed $project/$feature_dir ($(_wt_agent_label "$agent"))"
+  echo "Close the agent session, then run 'wt pop' from any shell to resume."
+  cd "$WORKTREE_BASE"
+}
+
+_wt_pop() {
+  if [[ ! -f "$WT_STASH_FILE" ]]; then
+    echo "Error: No stashed worktree" >&2
+    return 1
+  fi
+
+  local wt_path agent
+  wt_path=$(sed -n '1p' "$WT_STASH_FILE")
+  agent=$(sed -n '2p' "$WT_STASH_FILE")
+
+  if [[ -z "$wt_path" || ! -d "$wt_path" ]]; then
+    echo "Error: Stashed worktree path is missing: $wt_path" >&2
+    rm -f "$WT_STASH_FILE"
+    return 1
+  fi
+
+  agent=$(_wt_resolve_agent "$agent") || return 1
+  _wt_require_agent "$agent" || return 1
+
+  rm -f "$WT_STASH_FILE"
+  cd "$wt_path"
+
+  echo "Resuming $(_wt_agent_label "$agent") in $wt_path..."
+  _wt_continue_agent "$agent"
 }
 
 _wt_ls() {

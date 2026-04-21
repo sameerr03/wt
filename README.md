@@ -1,12 +1,12 @@
 # wt
 
-Git worktree manager for Claude Code workflows. Create isolated worktrees per feature, work with Claude, merge PRs, and clean up — all in one tool.
+Git worktree manager for coding-agent workflows. Create isolated worktrees per feature, work with Codex or Claude, merge PRs, and clean up — all in one tool.
 
-## Setup with Claude Code
+## Setup with Codex
 
 The easiest way to get started. This assumes you keep all your git repos in a single parent directory (e.g. `~/Code`, `~/Projects`, `~/dev`, etc.).
 
-1. Clone the repo and paste this prompt into Claude Code:
+1. Clone the repo and paste this prompt into Codex:
 
    ```
    I just cloned https://github.com/sameerr03/wt.git to ~/.wt. Set it up for me:
@@ -69,36 +69,38 @@ Explicit arguments always override auto-detected values — the old `wt merge ca
 
 ## Commands
 
-### `wt new [project] <feature> [--base <branch>]`
+### `wt new [project] <feature> [--base <branch>] [--agent codex|claude]`
 
-Creates a worktree, copies `.env` files, installs dependencies, and launches Claude Code.
+Creates a worktree, copies `.env` files, installs dependencies, and launches your configured agent. `codex` is the default; use `--agent claude` to override per command.
+
+Set `WT_CLI_AGENT="claude"` in `config.sh` if you want Claude to remain the default.
 
 ```bash
 wt new carousel fix-slider
 wt new fix-slider              # project auto-detected from current directory
 wt new carousel fix-slider --base dev
+wt new carousel fix-slider --agent claude
 ```
 
-### `wt issue [project] <issue#> [--base <branch>]`
+### `wt issue [project] <issue#> [--base <branch>] [--agent codex|claude]`
 
-Creates a worktree from a GitHub issue. Fetches the issue title and body, slugifies the title into a branch name, creates the worktree, and launches Claude Code with the issue context pre-loaded for a discuss-then-plan workflow.
+Creates a worktree from a GitHub issue. Fetches the issue title and body, slugifies the title into a branch name, creates the worktree, and launches your chosen agent with the issue context pre-loaded for a discuss-then-plan workflow.
 
 ```bash
 wt issue carousel 123
 wt issue 123                   # project auto-detected from current directory
 wt issue carousel 123 --base dev
+wt issue carousel 123 --agent claude
 ```
 
-### `wt cd [project] [feature] [--nc]`
+### `wt cd [project] [feature] [--agent codex|claude]`
 
-Jumps into a worktree and continues the most recent Claude Code session. If no worktree exists but the branch does (locally or on the remote), it automatically creates the worktree, copies `.env` files, installs dependencies, and resumes the session.
-
-Use `--nc` to jump into the worktree without starting Claude.
+Jumps into a worktree and continues the most recent session for the selected agent.
 
 ```bash
 wt cd carousel fix-slider
 wt cd fix-slider               # project auto-detected
-wt cd carousel fix-slider --nc
+wt cd --agent claude
 ```
 
 ### `wt merge [project] [feature] [--squash|--rebase|--merge]`
@@ -147,6 +149,7 @@ All config lives in `config.sh`:
 | `WORKTREE_BASE` | Where worktrees are created | `$HOME/Code/worktrees` |
 | `DEFAULT_BASE_BRANCH` | Branch to base new worktrees on | `main` |
 | `DEFAULT_INSTALL_CMD` | Default install command | `npm install` |
+| `WT_CLI_AGENT` | Default coding CLI to launch | `codex` |
 | `WT_ISSUE_PROMPT` | Prompt template for `wt issue` | discuss-then-plan template |
 
 ## Requirements
@@ -155,4 +158,4 @@ All config lives in `config.sh`:
 - `git`
 - [`gh`](https://cli.github.com/) (GitHub CLI) — for `merge` and `ls` PR status
 - [`jq`](https://jqlang.github.io/jq/) — for parsing PR status
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — launched automatically on `wt new`
+- [`codex`](https://developers.openai.com/codex/cli/) or [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — launched automatically on `wt new`

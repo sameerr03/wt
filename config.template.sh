@@ -15,10 +15,11 @@ declare -A WT_PKG_MANAGER=(
 WORKTREE_BASE="$HOME/Code/worktrees"
 DEFAULT_BASE_BRANCH="main"
 DEFAULT_INSTALL_CMD="npm install"
+WT_CLI_AGENT="codex"
 
 # Prompt template for wt issue — used when creating a worktree from a GitHub issue.
 # Placeholders: {{number}}, {{title}}, {{labels}}, {{body}}
-# The prompt is designed to start a discuss-then-plan workflow with Claude.
+# The prompt is designed to start a discuss-then-plan workflow with your coding agent.
 WT_ISSUE_PROMPT='You are working on a GitHub issue in this repository.
 
 ## Issue #{{number}}: {{title}}
