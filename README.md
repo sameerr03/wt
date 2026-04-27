@@ -69,17 +69,19 @@ Explicit arguments always override auto-detected values — the old `wt merge ca
 
 ## Commands
 
-### `wt new [project] <feature> [--base <branch>] [--agent codex|claude]`
+### `wt new [--manual] [--base <branch>] [--agent codex|claude]`
 
-Creates a worktree, copies `.env` files, installs dependencies, and launches your configured agent. `codex` is the default; use `--agent claude` to override per command.
+By default, drops into an interactive TUI (requires [`gum`](https://github.com/charmbracelet/gum)) where you pick the base branch and type your prompt directly. The agent generates the branch name from your prompt, the worktree is created, deps are installed, and the agent launches with your prompt preloaded.
 
-Set `WT_CLI_AGENT="claude"` in `config.sh` if you want Claude to remain the default.
+`--manual` (or `-m`) keeps the old flow: asks for a feature name, no prompt, no auto-branch-naming.
+
+The default agent comes from `WT_CLI_AGENT` in `config.sh` (set it to `"claude"` if you want Claude as the default). Override per-invocation with `--agent codex` or `--agent claude`.
 
 ```bash
-wt new carousel fix-slider
-wt new fix-slider              # project auto-detected from current directory
-wt new carousel fix-slider --base dev
-wt new carousel fix-slider --agent claude
+wt new                         # interactive TUI
+wt new --manual                # old feature-name prompt flow
+wt new --base dev              # TUI, default base branch = dev
+wt new --manual --agent claude # manual flow, Claude instead of Codex
 ```
 
 ### `wt issue [project] <issue#> [--base <branch>] [--agent codex|claude]`
@@ -134,6 +136,17 @@ carousel:
     PR #42 — ✓ approved, ✓ CHECKS PASS
 ```
 
+### `wt stash` / `wt pop`
+
+Park the current worktree so you can free up your terminal workspace for other work, then resume later. `stash` records the worktree path and agent name to `~/.wt_stash` and `cd`s you out. `pop` (from any shell, any workspace) `cd`s back in and resumes the agent's most recent session (`claude --continue` or `codex resume --last`). Only one slot — stashing again prompts before overwriting.
+
+The stash doesn't preserve the live process — close your agent session before stashing. The point is to remember *which* worktree you were in without having to re-pick via fzf.
+
+```bash
+wt stash           # from inside a worktree
+wt pop             # from anywhere, resumes the stashed session
+```
+
 ### `wt help`
 
 Shows usage and examples.
@@ -158,4 +171,6 @@ All config lives in `config.sh`:
 - `git`
 - [`gh`](https://cli.github.com/) (GitHub CLI) — for `merge` and `ls` PR status
 - [`jq`](https://jqlang.github.io/jq/) — for parsing PR status
+- [`fzf`](https://github.com/junegunn/fzf) — for interactive project/worktree pickers
+- [`gum`](https://github.com/charmbracelet/gum) — for the `wt new` TUI (optional; without it, use `wt new --manual`)
 - [`codex`](https://developers.openai.com/codex/cli/) or [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — launched automatically on `wt new`

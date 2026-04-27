@@ -27,7 +27,9 @@ _wt_help() {
   echo "wt — Git worktree manager for coding-agent workflows"
   echo ""
   echo "Commands:"
-  echo "  new   [--base <branch>] [--agent codex|claude]   Pick project, name feature, create worktree"
+  echo "  new   [--manual] [--base <branch>] [--agent codex|claude]"
+  echo "                                 Interactive TUI to compose prompt, agent picks branch name"
+  echo "                                 (--manual falls back to old feature-name prompt flow)"
   echo "  issue [project] <issue#> [--base <branch>] [--agent codex|claude]"
   echo "                                 Create worktree from GitHub issue"
   echo "  cd    [--agent codex|claude]   Pick worktree to jump into"
@@ -78,8 +80,13 @@ _wt_get_branch() {
 
 _wt_get_install_cmd() {
   local project="$1"
-  if [[ -n "${WT_PKG_MANAGER[$project]}" ]]; then
-    echo "${WT_PKG_MANAGER[$project]} install"
+  local val="${WT_PKG_MANAGER[$project]}"
+  if [[ -n "$val" ]]; then
+    if [[ "$val" == *" "* ]]; then
+      echo "$val"
+    else
+      echo "$val install"
+    fi
   else
     echo "$DEFAULT_INSTALL_CMD"
   fi
@@ -87,6 +94,10 @@ _wt_get_install_cmd() {
 
 _wt_has_fzf() {
   command -v fzf &>/dev/null
+}
+
+_wt_has_gum() {
+  command -v gum &>/dev/null
 }
 
 _wt_resolve_agent() {
@@ -149,7 +160,7 @@ _wt_launch_agent() {
 _wt_generate_branch_name() {
   local agent="$1"
   local title="$2"
-  local prompt="Generate a concise git branch name for this GitHub issue title.
+  local prompt="Generate a concise git branch name summarising the following task.
 
 Requirements:
 - lowercase only
@@ -160,7 +171,7 @@ Requirements:
 - keep it short but descriptive
 - output only the branch name, with no explanation or formatting
 
-Issue title: $title"
+Task: $title"
   local feature=""
 
   case "$agent" in
@@ -266,10 +277,78 @@ _wt_cd() {
   fi
 }
 
+# Create worktree + copy env + install. Args: project, repo_path, feature, base_branch, wt_path.
+_wt_provision_worktree() {
+  local project="$1" repo_path="$2" feature="$3" base_branch="$4" wt_path="$5"
+
+  if [[ -d "$wt_path" ]]; then
+    echo "Error: Worktree already exists at $wt_path" >&2
+    return 1
+  fi
+
+  mkdir -p "$WORKTREE_BASE/$project"
+
+  echo "Creating worktree for $project/$feature (base: $base_branch)..."
+
+  git -C "$repo_path" fetch origin "$base_branch" 2>/dev/null
+  if ! git -C "$repo_path" worktree add -b "$feature" "$wt_path" "origin/$base_branch" 2>/dev/null; then
+    if ! git -C "$repo_path" worktree add "$wt_path" "$feature" 2>/dev/null; then
+      echo "Error: Failed to create worktree. Does the branch '$feature' already exist and is checked out elsewhere?" >&2
+      return 1
+    fi
+  fi
+
+  echo "Worktree created at $wt_path"
+
+  local env_count=0
+  for env_file in "$repo_path"/.env*; do
+    if [[ -f "$env_file" ]]; then
+      cp "$env_file" "$wt_path/"
+      env_count=$((env_count + 1))
+    fi
+  done
+  echo "Copied $env_count env file(s)"
+
+  local install_cmd="$(_wt_get_install_cmd "$project")"
+  echo "Running $install_cmd..."
+  (cd "$wt_path" && eval "$install_cmd")
+
+  if [[ $? -ne 0 ]]; then
+    echo "Warning: $install_cmd failed. You may need to run it manually."
+  fi
+}
+
+# Interactive compose: pick base branch, type prompt. Sets globals.
+_wt_compose_tui() {
+  local default_base="$1"
+  local agent="$2"
+
+  if ! _wt_has_gum; then
+    echo "Error: gum required for TUI (brew install gum)" >&2
+    return 1
+  fi
+
+  gum style --foreground 212 --bold "wt new — compose session ($(_wt_agent_label "$agent"))"
+  echo ""
+
+  echo "Base branch:"
+  _wt_tui_base=$(gum input --value "$default_base" --placeholder "base branch") || return 1
+  [[ -z "$_wt_tui_base" ]] && _wt_tui_base="$default_base"
+
+  echo "Prompt (Ctrl+D to submit, Esc to cancel):"
+  _wt_tui_prompt=$(gum write --placeholder "Describe what you want the agent to do..." --width 80 --height 12) || return 1
+
+  if [[ -z "$_wt_tui_prompt" ]]; then
+    echo "Error: Prompt required" >&2
+    return 1
+  fi
+}
+
 _wt_new() {
   local base_branch="$DEFAULT_BASE_BRANCH"
   local agent
   agent=$(_wt_resolve_agent) || return 1
+  local manual=false
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -282,6 +361,10 @@ _wt_new() {
         _wt_require_option_value "$1" "$2" || return 1
         agent=$(_wt_resolve_agent "$2") || return 1
         shift 2
+        ;;
+      --manual|-m)
+        manual=true
+        shift
         ;;
       *)      shift ;;
     esac
@@ -300,60 +383,30 @@ _wt_new() {
     return 1
   fi
 
-  _wt_require_agent "$agent" || return 1
+  local feature prompt=""
+  if $manual; then
+    _wt_require_agent "$agent" || return 1
+    printf "Feature name: "
+    read -r feature
+    if [[ -z "$feature" ]]; then
+      echo "Error: Feature name required"
+      return 1
+    fi
+  else
+    _wt_compose_tui "$base_branch" "$agent" || return 1
+    base_branch="$_wt_tui_base"
+    prompt="$_wt_tui_prompt"
+    _wt_require_agent "$agent" || return 1
 
-  # Prompt for feature name
-  printf "Feature name: "
-  local feature
-  read -r feature
-  if [[ -z "$feature" ]]; then
-    echo "Error: Feature name required"
-    return 1
+    echo "Generating branch name with $(_wt_agent_label "$agent")..."
+    feature=$(_wt_generate_branch_name "$agent" "$prompt") || return 1
+    echo "Branch: $feature"
   fi
 
   local feature_dir="$(_wt_strip_branch_prefix "$feature")"
   local wt_path="$WORKTREE_BASE/$project/$feature_dir"
 
-  if [[ -d "$wt_path" ]]; then
-    echo "Error: Worktree already exists at $wt_path"
-    return 1
-  fi
-
-  # Create project dir under worktrees if needed
-  mkdir -p "$WORKTREE_BASE/$project"
-
-  echo "Creating worktree for $project/$feature (base: $base_branch)..."
-
-  # Fetch latest and create branch + worktree
-  git -C "$repo_path" fetch origin "$base_branch" 2>/dev/null
-  if ! git -C "$repo_path" worktree add -b "$feature" "$wt_path" "origin/$base_branch" 2>/dev/null; then
-    # Branch might already exist
-    if ! git -C "$repo_path" worktree add "$wt_path" "$feature" 2>/dev/null; then
-      echo "Error: Failed to create worktree. Does the branch '$feature' already exist and is checked out elsewhere?"
-      return 1
-    fi
-  fi
-
-  echo "Worktree created at $wt_path"
-
-  # Copy env files
-  local env_count=0
-  for env_file in "$repo_path"/.env*; do
-    if [[ -f "$env_file" ]]; then
-      cp "$env_file" "$wt_path/"
-      env_count=$((env_count + 1))
-    fi
-  done
-  echo "Copied $env_count env file(s)"
-
-  # Install dependencies
-  local install_cmd="$(_wt_get_install_cmd "$project")"
-  echo "Running $install_cmd..."
-  (cd "$wt_path" && eval "$install_cmd")
-
-  if [[ $? -ne 0 ]]; then
-    echo "Warning: $install_cmd failed. You may need to run it manually."
-  fi
+  _wt_provision_worktree "$project" "$repo_path" "$feature" "$base_branch" "$wt_path" || return 1
 
   echo ""
   local agent_label
@@ -362,7 +415,7 @@ _wt_new() {
   echo "---"
 
   cd "$wt_path"
-  _wt_launch_agent "$agent"
+  _wt_launch_agent "$agent" "$prompt"
 }
 
 _wt_issue() {
